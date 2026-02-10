@@ -1,6 +1,13 @@
 from setuptools import setup
-from torch.utils.cpp_extension import CUDAExtension, CppExtension, BuildExtension
-import torch
+
+try:
+    import torch
+    from torch.utils.cpp_extension import CUDAExtension, CppExtension, BuildExtension
+except ModuleNotFoundError:
+    torch = None
+    CUDAExtension = CppExtension = BuildExtension = None
+
+TORCH_AVAILABLE = torch is not None
 import sys
 import os
 
@@ -96,54 +103,60 @@ def configure_xpu():
     return CppExtension, ["ssim_sycl.cpp","ext.cpp"], "fused_ssim_xpu", compiler_args, link_args, detected_arch
 
 
-# Detect backend
-if torch.cuda.is_available():
-    extension_type, extension_files, build_name, compiler_args, link_args, detected_arch = configure_cuda()
-elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-    extension_type, extension_files, build_name, compiler_args, link_args, detected_arch = configure_mps()
-elif hasattr(torch, 'xpu') and torch.xpu.is_available():
-    extension_type, extension_files, build_name, compiler_args, link_args, detected_arch = configure_xpu()
-else:
-    extension_type, extension_files, build_name, compiler_args, link_args, detected_arch = configure_cuda()
+if TORCH_AVAILABLE:
+    # Detect backend
+    if torch.cuda.is_available():
+        extension_type, extension_files, build_name, compiler_args, link_args, detected_arch = configure_cuda()
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        extension_type, extension_files, build_name, compiler_args, link_args, detected_arch = configure_mps()
+    elif hasattr(torch, "xpu") and torch.xpu.is_available():
+        extension_type, extension_files, build_name, compiler_args, link_args, detected_arch = configure_xpu()
+    else:
+        extension_type, extension_files, build_name, compiler_args, link_args, detected_arch = configure_cuda()
 
-# Create a custom class that prints the architecture information
-class CustomBuildExtension(BuildExtension):
-    def build_extensions(self):
-        # For SYCL, override compiler to use icpx
-        if 'xpu' in build_name:
-            self.compiler.compiler_so = ['icpx'] + self.compiler.compiler_so[1:]
-            self.compiler.compiler_cxx = ['icpx'] + self.compiler.compiler_cxx[1:]
-            self.compiler.linker_so = ['icpx'] + self.compiler.linker_so[1:]
+    # Create a custom class that prints the architecture information
+    class CustomBuildExtension(BuildExtension):
+        def build_extensions(self):
+            # For SYCL, override compiler to use icpx
+            if "xpu" in build_name:
+                self.compiler.compiler_so = ["icpx"] + self.compiler.compiler_so[1:]
+                self.compiler.compiler_cxx = ["icpx"] + self.compiler.compiler_cxx[1:]
+                self.compiler.linker_so = ["icpx"] + self.compiler.linker_so[1:]
 
-        arch_info = f"Building with GPU architecture: {detected_arch if detected_arch else 'multiple architectures'}"
-        print("\n" + "="*50)
-        print(arch_info)
-        print("="*50 + "\n")
-        super().build_extensions()
+            arch_info = f"Building with GPU architecture: {detected_arch if detected_arch else 'multiple architectures'}"
+            print("\n" + "=" * 50)
+            print(arch_info)
+            print("=" * 50 + "\n")
+            super().build_extensions()
 
-setup(
-    name="fused_ssim",
-    packages=['fused_ssim'],
-    ext_modules=[
+    ext_modules = [
         extension_type(
             name=build_name,
             sources=extension_files,
             extra_compile_args=compiler_args,
-            extra_link_args=link_args
+            extra_link_args=link_args,
         )
-    ],
-    cmdclass={
-        'build_ext': CustomBuildExtension
-    }
+    ]
+    cmdclass = {"build_ext": CustomBuildExtension}
+else:
+    ext_modules = []
+    cmdclass = {}
+
+setup(
+    name="fused_ssim",
+    packages=["fused_ssim"],
+    ext_modules=ext_modules,
+    cmdclass=cmdclass,
 )
 
-# Print again at the end of setup.py execution
-if "nvcc" in compiler_args:
-    final_msg = "Setup completed. NVCC args: {}. CXX args: {}. Link args: {}.".format(
-        compiler_args["nvcc"], compiler_args["cxx"], link_args
-    )
-else:
-    final_msg = "Setup completed. CXX args: {}. Link args: {}.".format(
-        compiler_args["cxx"], link_args
-    )
-print(final_msg)
+if TORCH_AVAILABLE:
+    # Print again at the end of setup.py execution
+    if "nvcc" in compiler_args:
+        final_msg = "Setup completed. NVCC args: {}. CXX args: {}. Link args: {}.".format(
+            compiler_args["nvcc"], compiler_args["cxx"], link_args
+        )
+    else:
+        final_msg = "Setup completed. CXX args: {}. Link args: {}.".format(
+            compiler_args["cxx"], link_args
+        )
+    print(final_msg)
